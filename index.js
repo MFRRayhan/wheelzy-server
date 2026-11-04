@@ -11,7 +11,7 @@ const port = process.env.PORT || 5000;
 
 // ------------------------ FIREBASE ADMIN INIT ------------------------
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
-  "utf8"
+  "utf8",
 );
 const serviceAccount = JSON.parse(decoded);
 
@@ -25,7 +25,7 @@ app.use(
     origin: [`${process.env.SITE_DOMAIN}`],
     credentials: true,
     optionsSuccessStatus: 200,
-  })
+  }),
 );
 app.use(express.json());
 
@@ -135,7 +135,7 @@ async function run() {
         try {
           const result = await carCollection.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { status, updatedAt: new Date().toISOString() } }
+            { $set: { status, updatedAt: new Date().toISOString() } },
           );
 
           if (result.matchedCount === 0) {
@@ -157,7 +157,7 @@ async function run() {
             error: err.message,
           });
         }
-      }
+      },
     );
 
     app.get("/cars/:id", async (req, res) => {
@@ -254,7 +254,7 @@ async function run() {
       try {
         const result = await carCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: setData }
+          { $set: setData },
         );
 
         if (result.matchedCount === 0)
@@ -298,7 +298,7 @@ async function run() {
           completedRentals,
           cancelledRentals,
         });
-      }
+      },
     );
 
     app.get(
@@ -329,7 +329,7 @@ async function run() {
           totalEarnings,
           pendingPayout: 0,
         });
-      }
+      },
     );
 
     app.get(
@@ -354,7 +354,7 @@ async function run() {
         });
 
         res.json({ totalCars, activeCars, pendingCars, rejectedCars });
-      }
+      },
     );
 
     app.get("/rider/payments", verifyFBToken, verifyRider, async (req, res) => {
@@ -407,7 +407,7 @@ async function run() {
               const car = cars.find((c) => c._id.toString() === rental.carId);
               const payment = payments.find(
                 (p) =>
-                  p.carId === rental.carId && p.userEmail === rental.userEmail
+                  p.carId === rental.carId && p.userEmail === rental.userEmail,
               );
 
               const user = await userCollection.findOne({
@@ -430,7 +430,7 @@ async function run() {
                 paymentDate: payment?.paidAt || null,
                 paymentType: payment?.paymentType || "N/A",
               };
-            })
+            }),
           );
 
           res.json(paymentDetails);
@@ -440,7 +440,7 @@ async function run() {
             .status(500)
             .json({ message: "Failed to fetch rider payments details" });
         }
-      }
+      },
     );
 
     // ------------------------ MEMBERSHIP APIs ------------------------
@@ -469,7 +469,7 @@ async function run() {
               purchaseDate: rental.rentalDate,
               status: rental.status,
             };
-          })
+          }),
         );
 
         res.json(memberships);
@@ -508,7 +508,7 @@ async function run() {
               status: "cancelled",
               cancelledAt: new Date().toISOString(),
             },
-          }
+          },
         );
 
         res.json({ modifiedCount: result.modifiedCount });
@@ -563,7 +563,7 @@ async function run() {
       const rentalResult = await rentalCollection.insertOne(rentalData);
       const carUpdate = await carCollection.updateOne(
         { _id: new ObjectId(carId), isBooked: false },
-        { $set: { isBooked: true, updatedAt: new Date().toISOString() } }
+        { $set: { isBooked: true, updatedAt: new Date().toISOString() } },
       );
 
       if (carUpdate.matchedCount === 0) {
@@ -618,13 +618,15 @@ async function run() {
 
       const result = await rentalCollection.updateOne(
         { _id: rental._id },
-        { $set: { status: "cancelled", cancelledAt: new Date().toISOString() } }
+        {
+          $set: { status: "cancelled", cancelledAt: new Date().toISOString() },
+        },
       );
 
       // Update car as available again
       await carCollection.updateOne(
         { _id: new ObjectId(rental.carId) },
-        { $set: { isBooked: false, updatedAt: new Date().toISOString() } }
+        { $set: { isBooked: false, updatedAt: new Date().toISOString() } },
       );
 
       res.json({ modifiedCount: result.modifiedCount });
@@ -643,13 +645,61 @@ async function run() {
       if (existing) {
         await userCollection.updateOne(
           { email: userData.email },
-          { $set: { lastLoggedIn: new Date().toISOString() } }
+          { $set: { lastLoggedIn: new Date().toISOString() } },
         );
         return res.send({ message: "User updated last login" });
       }
 
       const result = await userCollection.insertOne(userData);
       res.send(result);
+    });
+
+    // Update logged-in user's profile
+    app.patch("/users/profile", verifyFBToken, async (req, res) => {
+      try {
+        const { displayName, photoURL } = req.body;
+        const email = req.decoded_email;
+
+        if (!email) {
+          return res.status(401).json({
+            message: "Unauthorized user",
+          });
+        }
+
+        if (!displayName || !displayName.trim()) {
+          return res.status(400).json({
+            message: "Display name is required",
+          });
+        }
+
+        const result = await userCollection.updateOne(
+          { email },
+          {
+            $set: {
+              displayName: displayName.trim(),
+              photoURL: photoURL || "",
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({
+            message: "User profile not found",
+          });
+        }
+
+        res.json({
+          success: true,
+          message: "Profile updated successfully",
+        });
+      } catch (error) {
+        console.error("Profile update error:", error);
+
+        res.status(500).json({
+          message: "Failed to update profile",
+        });
+      }
     });
 
     // Get role of a user by email
@@ -705,7 +755,7 @@ async function run() {
 
           const result = await userCollection.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { role } }
+            { $set: { role } },
           );
 
           if (result.matchedCount === 0) {
@@ -717,7 +767,7 @@ async function run() {
           console.error("Failed to update user role:", error);
           res.status(500).json({ message: "Failed to update user role" });
         }
-      }
+      },
     );
 
     // ------------------------ RIDER APPLICATION ------------------------
@@ -756,7 +806,7 @@ async function run() {
           .toArray();
 
         res.json(applications);
-      }
+      },
     );
 
     // Admin: Approve or Reject Rider
@@ -782,19 +832,19 @@ async function run() {
         // update application status
         await riderApplicationCollection.updateOne(
           { _id: application._id },
-          { $set: { status, reviewedAt: new Date().toISOString() } }
+          { $set: { status, reviewedAt: new Date().toISOString() } },
         );
 
         // if approved → update user role
         if (status === "approved") {
           await userCollection.updateOne(
             { email: application.email },
-            { $set: { role: "rider" } }
+            { $set: { role: "rider" } },
           );
         }
 
         res.json({ message: `Rider application ${status}` });
-      }
+      },
     );
 
     // ------------------------ STRIPE PAYMENT APIs ------------------------
@@ -914,7 +964,7 @@ async function run() {
           const totalPayments = payments.length;
           const totalRevenue = payments.reduce(
             (sum, p) => sum + Number(p.amount || 0),
-            0
+            0,
           );
 
           res.json({
@@ -930,7 +980,7 @@ async function run() {
           console.error("Admin dashboard error:", error);
           res.status(500).json({ message: "Failed to load dashboard stats" });
         }
-      }
+      },
     );
 
     // Rider dashboard stats
@@ -951,7 +1001,7 @@ async function run() {
           .toArray();
         const totalRevenue = payments.reduce(
           (sum, p) => sum + Number(p.amount || 0),
-          0
+          0,
         );
 
         res.json({
@@ -960,7 +1010,7 @@ async function run() {
           totalPayments: payments.length,
           totalRevenue,
         });
-      }
+      },
     );
 
     // User dashboard stats
@@ -976,7 +1026,7 @@ async function run() {
       const payments = await paymentCollection.find({ userEmail }).toArray();
       const totalSpent = payments.reduce(
         (sum, p) => sum + Number(p.amount || 0),
-        0
+        0,
       );
 
       res.json({
@@ -1015,7 +1065,7 @@ async function run() {
             const car = cars.find((c) => c._id.toString() === rental.carId);
             const payment = payments.find(
               (p) =>
-                p.carId === rental.carId && p.userEmail === rental.userEmail
+                p.carId === rental.carId && p.userEmail === rental.userEmail,
             );
 
             return {
@@ -1037,8 +1087,122 @@ async function run() {
           console.error("Ride request fetch error:", error);
           res.status(500).json({ message: "Failed to fetch ride requests" });
         }
-      }
+      },
     );
+
+    // ─────────────────────────────────────────────────────────────────────
+    // DEMO ACCOUNT PROVISIONING
+    // POST /provision-demo-accounts?secret=<DEMO_PROVISION_SECRET>
+    //
+    // Creates the three demo Firebase accounts and upserts their MongoDB
+    // documents in one request. Idempotent — safe to call multiple times.
+    // Protected by a shared secret so it cannot be triggered by strangers.
+    // ─────────────────────────────────────────────────────────────────────
+    app.post("/provision-demo-accounts", async (req, res) => {
+      // 1. Verify secret
+      const { secret } = req.query;
+      if (!secret || secret !== process.env.DEMO_PROVISION_SECRET) {
+        return res.status(403).json({ message: "Forbidden: invalid secret" });
+      }
+
+      const demoAccounts = [
+        {
+          email: process.env.DEMO_ADMIN_EMAIL,
+          password: process.env.DEMO_ADMIN_PASSWORD,
+          displayName: "Demo Admin",
+          role: "admin",
+          photoURL: "https://i.ibb.co.com/TM9j0Rqd/icon-7797704-640.png",
+        },
+        {
+          email: process.env.DEMO_RIDER_EMAIL,
+          password: process.env.DEMO_RIDER_PASSWORD,
+          displayName: "Demo Rider",
+          role: "rider",
+          photoURL: "https://i.ibb.co.com/TM9j0Rqd/icon-7797704-640.png",
+        },
+        {
+          email: process.env.DEMO_USER_EMAIL,
+          password: process.env.DEMO_USER_PASSWORD,
+          displayName: "Demo User",
+          role: "user",
+          photoURL: "https://i.ibb.co.com/TM9j0Rqd/icon-7797704-640.png",
+        },
+      ];
+
+      const results = [];
+
+      for (const account of demoAccounts) {
+        const result = { email: account.email, role: account.role };
+
+        // ── Step 1: Create or verify Firebase account ──────────────────
+        try {
+          // Check if Firebase account already exists
+          const existingUser = await admin.auth().getUserByEmail(account.email);
+          // Account exists — force-update the password and displayName to
+          // match exactly what is in .env. This fixes the case where the
+          // account was created earlier with a different password.
+          await admin.auth().updateUser(existingUser.uid, {
+            password: account.password,
+            displayName: account.displayName,
+            emailVerified: true,
+          });
+          result.firebase = "exists — password synced";
+        } catch (fbErr) {
+          if (fbErr.code === "auth/user-not-found") {
+            // Create the account fresh
+            try {
+              await admin.auth().createUser({
+                email: account.email,
+                password: account.password,
+                displayName: account.displayName,
+                emailVerified: true,
+              });
+              result.firebase = "created";
+            } catch (createErr) {
+              result.firebase = `error: ${createErr.message}`;
+            }
+          } else {
+            result.firebase = `error: ${fbErr.message}`;
+          }
+        }
+
+        // ── Step 2: Upsert MongoDB document ────────────────────────────
+        try {
+          const now = new Date().toISOString();
+          const upsertResult = await userCollection.updateOne(
+            { email: account.email },
+            {
+              $set: {
+                email: account.email,
+                displayName: account.displayName,
+                photoURL: account.photoURL,
+                role: account.role,
+                lastLoggedIn: now,
+              },
+              $setOnInsert: { createdAt: now },
+            },
+            { upsert: true },
+          );
+
+          if (upsertResult.upsertedCount > 0) {
+            result.mongodb = "inserted";
+          } else if (upsertResult.modifiedCount > 0) {
+            result.mongodb = "updated";
+          } else {
+            result.mongodb = "already up-to-date";
+          }
+        } catch (dbErr) {
+          result.mongodb = `error: ${dbErr.message}`;
+        }
+
+        results.push(result);
+      }
+
+      return res.json({
+        message: "Demo account provisioning complete",
+        results,
+      });
+    });
 
     // ------------------------ ROOT ------------------------
     app.get("/", (req, res) => res.send("Hello from Wheelzy Backend"));
