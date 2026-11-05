@@ -47,6 +47,105 @@ const verifyFBToken = async (req, res, next) => {
   }
 };
 
+// Generate monthly analytics for the last 6 months.
+// dateField: rentalDate or paidAt
+// sumField: amount for payments, null for record counts
+
+const getMonthlyAnalytics = async (
+  collection,
+  dateField,
+  filter = {},
+  sumField = null,
+) => {
+  const now = new Date();
+
+  const startDate = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+  const monthlyRecords = await collection
+    .aggregate([
+      {
+        $match: filter,
+      },
+      {
+        $addFields: {
+          analyticsDate: {
+            $convert: {
+              input: `$${dateField}`,
+              to: "date",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+      {
+        $match: {
+          analyticsDate: { $gte: startDate },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: {
+              format: "%Y-%m",
+              date: "$analyticsDate",
+            },
+          },
+          value: sumField
+            ? { $sum: { $ifNull: [`$${sumField}`, 0] } }
+            : { $sum: 1 },
+        },
+      },
+      {
+        $sort: { _id: 1 },
+      },
+    ])
+    .toArray();
+
+  const recordsMap = new Map(
+    monthlyRecords.map((item) => [item._id, item.value]),
+  );
+
+  return Array.from({ length: 6 }, (_, index) => {
+    const date = new Date(now.getFullYear(), now.getMonth() - 5 + index, 1);
+
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+      2,
+      "0",
+    )}`;
+
+    return {
+      month: date.toLocaleString("en-US", {
+        month: "short",
+        year: "2-digit",
+      }),
+      value: recordsMap.get(key) ?? 0,
+    };
+  });
+};
+
+// Count records grouped by status.
+const getStatusAnalytics = async (collection, filter = {}) => {
+  return collection
+    .aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          status: "$_id",
+          count: 1,
+        },
+      },
+    ])
+    .toArray();
+};
+
 // ------------------------ MONGODB CONNECTION ------------------------
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.erbrsue.mongodb.net/?appName=Cluster0`;
 const client = new MongoClient(uri, {
@@ -941,100 +1040,432 @@ async function run() {
     // ------------------------ DASHBOARD APIs ------------------------
 
     // Admin dashboard stats
+
     app.get(
       "/admin/dashboard-stats",
       verifyFBToken,
       verifyAdmin,
       async (req, res) => {
         try {
-          const totalUsers = await userCollection.countDocuments();
-
-          const totalCars = await carCollection.countDocuments();
-          const pendingCars = await carCollection.countDocuments({
-            status: "pending",
-          });
-          const approvedCars = await carCollection.countDocuments({
-            status: "approved",
-          });
-          const rejectedCars = await carCollection.countDocuments({
-            status: "rejected",
-          });
-
-          const payments = await paymentCollection.find({}).toArray();
-          const totalPayments = payments.length;
-          const totalRevenue = payments.reduce(
-            (sum, p) => sum + Number(p.amount || 0),
-            0,
-          );
-
-          res.json({
+          const [
             totalUsers,
+            totalRiders,
             totalCars,
             pendingCars,
             approvedCars,
             rejectedCars,
+            totalRentals,
+            totalPayments,
+            paymentSummary,
+            userDistribution,
+            carStatusDistribution,
+            rentalStatusDistribution,
+            monthlyRevenue,
+            monthlyRentals,
+            recentPayments,
+            recentRentals,
+          ] = await Promise.all([
+            userCollection.countDocuments(),
+
+            userCollection.countDocuments({ role: "rider" }),
+
+            carCollection.countDocuments(),
+
+            carCollection.countDocuments({ status: "pending" }),
+
+            carCollection.countDocuments({ status: "approved" }),
+
+            carCollection.countDocuments({ status: "rejected" }),
+
+            rentalCollection.countDocuments(),
+
+            paymentCollection.countDocuments(),
+
+            paymentCollection
+              .aggregate([
+                {
+                  $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                  },
+                },
+              ])
+              .toArray(),
+
+            userCollection
+              .aggregate([
+                {
+                  $group: {
+                    _id: "$role",
+                    count: { $sum: 1 },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 0,
+                    role: "$_id",
+                    count: 1,
+                  },
+                },
+              ])
+              .toArray(),
+
+            getStatusAnalytics(carCollection),
+
+            getStatusAnalytics(rentalCollection),
+
+            getMonthlyAnalytics(paymentCollection, "paidAt", {}, "amount"),
+
+            getMonthlyAnalytics(rentalCollection, "rentalDate"),
+
+            paymentCollection.find({}).sort({ paidAt: -1 }).limit(5).toArray(),
+
+            rentalCollection
+              .find({})
+              .sort({ rentalDate: -1 })
+              .limit(5)
+              .toArray(),
+          ]);
+
+          const totalRevenue = paymentSummary[0]?.total ?? 0;
+
+          res.json({
+            totalUsers,
+            totalRiders,
+            totalCars,
+            pendingCars,
+            approvedCars,
+            rejectedCars,
+            totalRentals,
             totalPayments,
             totalRevenue,
+
+            userDistribution,
+            carStatusDistribution,
+            rentalStatusDistribution,
+
+            monthlyRevenue,
+            monthlyRentals,
+
+            recentPayments,
+            recentRentals,
           });
         } catch (error) {
           console.error("Admin dashboard error:", error);
-          res.status(500).json({ message: "Failed to load dashboard stats" });
+
+          res.status(500).json({
+            message: "Failed to load admin dashboard analytics",
+          });
         }
       },
     );
 
     // Rider dashboard stats
+
     app.get(
       "/rider/dashboard-stats",
       verifyFBToken,
       verifyRider,
       async (req, res) => {
-        const riderEmail = req.decoded_email;
-        const managedCars = await carCollection.find({ riderEmail }).toArray();
-        const carIds = managedCars.map((c) => c._id.toString());
-        const totalRentals = await rentalCollection.countDocuments({
-          carId: { $in: carIds },
-          status: "active",
-        });
-        const payments = await paymentCollection
-          .find({ carId: { $in: carIds } })
-          .toArray();
-        const totalRevenue = payments.reduce(
-          (sum, p) => sum + Number(p.amount || 0),
-          0,
-        );
+        try {
+          const riderEmail = req.decoded_email;
 
-        res.json({
-          totalCars: managedCars.length,
-          totalRentals,
-          totalPayments: payments.length,
-          totalRevenue,
-        });
+          const riderCars = await carCollection.find({ riderEmail }).toArray();
+
+          const carIds = riderCars.map((car) => car._id.toString());
+
+          const rentalFilter = {
+            carId: { $in: carIds },
+          };
+
+          const paymentFilter = { riderEmail };
+
+          const [
+            rentalStats,
+            paymentSummary,
+            totalPayments,
+            monthlyEarnings,
+            monthlyRentals,
+            rentalStatusDistribution,
+            recentRentals,
+            recentPayments,
+          ] = await Promise.all([
+            rentalCollection
+              .aggregate([
+                { $match: rentalFilter },
+                {
+                  $group: {
+                    _id: "$status",
+                    count: { $sum: 1 },
+                  },
+                },
+              ])
+              .toArray(),
+
+            paymentCollection
+              .aggregate([
+                { $match: paymentFilter },
+                {
+                  $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                  },
+                },
+              ])
+              .toArray(),
+
+            paymentCollection.countDocuments(paymentFilter),
+
+            getMonthlyAnalytics(
+              paymentCollection,
+              "paidAt",
+              paymentFilter,
+              "amount",
+            ),
+
+            getMonthlyAnalytics(rentalCollection, "rentalDate", rentalFilter),
+
+            getStatusAnalytics(rentalCollection, rentalFilter),
+
+            rentalCollection
+              .find(rentalFilter)
+              .sort({ rentalDate: -1 })
+              .limit(5)
+              .toArray(),
+
+            paymentCollection
+              .find(paymentFilter)
+              .sort({ paidAt: -1 })
+              .limit(5)
+              .toArray(),
+          ]);
+
+          const getCount = (status) =>
+            rentalStats.find((item) => item._id === status)?.count ?? 0;
+
+          const totalRentals = rentalStats.reduce(
+            (total, item) => total + item.count,
+            0,
+          );
+
+          const totalEarnings = paymentSummary[0]?.total ?? 0;
+
+          const today = new Date();
+          const todayKey = today.toISOString().slice(0, 10);
+
+          const monthKey = today.toISOString().slice(0, 7);
+
+          const earningsByPeriod = await paymentCollection
+            .aggregate([
+              { $match: paymentFilter },
+              {
+                $addFields: {
+                  analyticsDate: {
+                    $convert: {
+                      input: "$paidAt",
+                      to: "date",
+                      onError: null,
+                      onNull: null,
+                    },
+                  },
+                },
+              },
+              {
+                $match: {
+                  analyticsDate: { $ne: null },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  today: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $eq: [
+                            {
+                              $dateToString: {
+                                format: "%Y-%m-%d",
+                                date: "$analyticsDate",
+                                timezone: "Asia/Dhaka",
+                              },
+                            },
+                            todayKey,
+                          ],
+                        },
+                        "$amount",
+                        0,
+                      ],
+                    },
+                  },
+                  monthly: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $eq: [
+                            {
+                              $dateToString: {
+                                format: "%Y-%m",
+                                date: "$analyticsDate",
+                                timezone: "Asia/Dhaka",
+                              },
+                            },
+                            monthKey,
+                          ],
+                        },
+                        "$amount",
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            ])
+            .toArray();
+
+          const periodEarnings = earningsByPeriod[0] ?? {
+            today: 0,
+            monthly: 0,
+          };
+
+          res.json({
+            totalCars: riderCars.length,
+
+            approvedCars: riderCars.filter((car) => car.status === "approved")
+              .length,
+
+            pendingCars: riderCars.filter((car) => car.status === "pending")
+              .length,
+
+            rejectedCars: riderCars.filter((car) => car.status === "rejected")
+              .length,
+
+            totalRentals,
+            activeRentals: getCount("active"),
+            completedRentals: getCount("completed"),
+            cancelledRentals: getCount("cancelled"),
+
+            totalPayments,
+            totalEarnings,
+            todayEarnings: periodEarnings.today,
+            monthlyEarnings: periodEarnings.monthly,
+            monthlyEarningsChart: monthlyEarnings,
+            monthlyRentals,
+            rentalStatusDistribution,
+
+            recentRentals,
+            recentPayments,
+          });
+        } catch (error) {
+          console.error("Rider dashboard error:", error);
+
+          res.status(500).json({
+            message: "Failed to load rider dashboard analytics",
+          });
+        }
       },
     );
 
     // User dashboard stats
+
     app.get("/user/dashboard-stats", verifyFBToken, async (req, res) => {
-      const userEmail = req.decoded_email;
+      try {
+        const userEmail = req.decoded_email;
 
-      const activeRentals = await rentalCollection.countDocuments({
-        userEmail,
-        status: "active",
-      });
-      const totalRentals = await rentalCollection.countDocuments({ userEmail });
+        const rentalFilter = { userEmail };
+        const paymentFilter = { userEmail };
 
-      const payments = await paymentCollection.find({ userEmail }).toArray();
-      const totalSpent = payments.reduce(
-        (sum, p) => sum + Number(p.amount || 0),
-        0,
-      );
+        const [
+          totalRentals,
+          activeRentals,
+          completedRentals,
+          cancelledRentals,
+          totalPayments,
+          paymentSummary,
+          rentalStatusDistribution,
+          monthlySpending,
+          monthlyRentals,
+          recentRentals,
+          recentPayments,
+        ] = await Promise.all([
+          rentalCollection.countDocuments(rentalFilter),
 
-      res.json({
-        activeRentals,
-        totalRentals,
-        totalPayments: payments.length,
-        totalSpent,
-      });
+          rentalCollection.countDocuments({
+            ...rentalFilter,
+            status: "active",
+          }),
+
+          rentalCollection.countDocuments({
+            ...rentalFilter,
+            status: "completed",
+          }),
+
+          rentalCollection.countDocuments({
+            ...rentalFilter,
+            status: "cancelled",
+          }),
+
+          paymentCollection.countDocuments(paymentFilter),
+
+          paymentCollection
+            .aggregate([
+              { $match: paymentFilter },
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: "$amount" },
+                },
+              },
+            ])
+            .toArray(),
+
+          getStatusAnalytics(rentalCollection, rentalFilter),
+
+          getMonthlyAnalytics(
+            paymentCollection,
+            "paidAt",
+            paymentFilter,
+            "amount",
+          ),
+
+          getMonthlyAnalytics(rentalCollection, "rentalDate", rentalFilter),
+
+          rentalCollection
+            .find(rentalFilter)
+            .sort({ rentalDate: -1 })
+            .limit(5)
+            .toArray(),
+
+          paymentCollection
+            .find(paymentFilter)
+            .sort({ paidAt: -1 })
+            .limit(5)
+            .toArray(),
+        ]);
+
+        res.json({
+          totalRentals,
+          activeRentals,
+          completedRentals,
+          cancelledRentals,
+
+          totalPayments,
+          totalSpent: paymentSummary[0]?.total ?? 0,
+
+          rentalStatusDistribution,
+          monthlySpending,
+          monthlyRentals,
+
+          recentRentals,
+          recentPayments,
+        });
+      } catch (error) {
+        console.error("User dashboard error:", error);
+
+        res.status(500).json({
+          message: "Failed to load user dashboard analytics",
+        });
+      }
     });
 
     // Rider ride requests
