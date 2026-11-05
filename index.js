@@ -1636,7 +1636,12 @@ async function run() {
     });
 
     // ------------------------ ROOT ------------------------
-    app.get("/", (req, res) => res.send("Hello from Wheelzy Backend"));
+    app.get("/", (req, res) =>
+      res.json({
+        success: true,
+        status: 200,
+      }),
+    );
 
     app.listen(port, () => console.log(`Server running on port ${port}`));
   } catch (err) {
