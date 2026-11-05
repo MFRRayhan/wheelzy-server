@@ -1636,12 +1636,19 @@ async function run() {
     });
 
     // ------------------------ ROOT ------------------------
-    app.get("/", (req, res) =>
-      res.json({
+    app.get("/", (req, res) => {
+      res.status(200).json({
         success: true,
+        message: "Server is running successfully!",
         status: 200,
-      }),
-    );
+        data: {
+          name: "Wheelzy API",
+          version: "1.0.0",
+          environment: process.env.NODE_ENV || "development",
+        },
+        timestamp: new Date().toISOString(),
+      });
+    });
 
     app.listen(port, () => console.log(`Server running on port ${port}`));
   } catch (err) {
